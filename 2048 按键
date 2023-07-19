@@ -1,0 +1,202 @@
+from machine import SPI, Pin, I2C
+import utime
+import st7789
+import urandom
+
+UP = Pin(1, Pin.IN)
+DOWN = Pin(0, Pin.IN)
+LEFT = Pin(2, Pin.IN)
+RIGHT = Pin(14, Pin.IN)
+
+UP.pull(Pin.PULL_DOWN)
+DOWN.pull(Pin.PULL_DOWN)
+LEFT.pull(Pin.PULL_DOWN)
+RIGHT.pull(Pin.PULL_DOWN)
+
+spi = SPI(0, baudrate=40000000, polarity=1, phase=0, bits=8, endia=0, sck=Pin(6), mosi=Pin(8))
+display = st7789.ST7789(spi, 240, 240, reset=Pin(11,func=Pin.GPIO, dir=Pin.OUT), dc=Pin(7,func=Pin.GPIO, dir=Pin.OUT))
+display.init()
+
+class Game2048:
+    def __init__(self, size):
+        self.size = size
+        self.reset_game()
+
+    def reset_game(self):
+        self.board = [[0] * self.size for _ in range(self.size)]
+        self.score = 0
+        
+        # Add the first random tile
+        r1 = urandom.randint(0, self.size*self.size-1)
+        self.board[r1 // self.size][r1 % self.size] = 2
+        
+        # Add the second random tile (different from the first)
+        r2 = urandom.randint(0, self.size*self.size-1)
+        while r2 == r1:
+            r2 = urandom.randint(0, self.size*self.size-1)
+        self.board[r2 // self.size][r2 % self.size] = 2
+
+
+    def add_random_tile(self):
+        r = urandom.randint(0, self.size*self.size-1)
+        while self.board[r // self.size][r % self.size] != 0:
+            r = urandom.randint(0, self.size*self.size-1)
+        self.board[r // self.size][r % self.size] = 2 if urandom.randint(0, 1) == 0 else 4
+
+    def compress(self):
+        new_board = [[0] * self.size for _ in range(self.size)]
+        for i in range(self.size):
+            pos = 0
+            for j in range(self.size):
+                if self.board[i][j] != 0:
+                    new_board[i][pos] = self.board[i][j]
+                    pos += 1
+        self.board = new_board
+
+    def merge(self):
+        for i in range(self.size):
+            for j in range(self.size - 1):
+                if self.board[i][j] == self.board[i][j + 1] and self.board[i][j] != 0:
+                    self.board[i][j] *= 2
+                    self.board[i][j + 1] = 0
+                    self.score += self.board[i][j]
+
+    def reverse(self):
+        new_board = []
+        for i in range(self.size):
+            new_board.append([])
+            for j in range(self.size):
+                new_board[i].append(self.board[i][self.size - j - 1])
+        self.board = new_board
+
+    def transpose(self):
+        self.board = [list(t) for t in zip(*self.board)]
+
+    def check_for_win(self):
+        for i in range(self.size):
+            for j in range(self.size):
+                if self.board[i][j] == 2048:
+                    return True
+        return False
+
+    def can_move(self, board):
+        for i in range(self.size):
+            for j in range(self.size - 1):
+                if board[i][j] == board[i][j + 1]:
+                    return True
+        return False
+
+    def can_move_left(self, board):
+        for i in range(self.size):
+            for j in range(self.size - 1):
+                if board[i][j] == 0 and board[i][j + 1] != 0:
+                    return True
+        return self.can_move(board)
+
+    def move(self, direction):
+        # 0 -> Up, 1 -> Down, 2 -> Left, 3 -> Right
+        def move_direction(board):
+            for _ in range(self.size):
+                self.compress()
+                self.merge()
+                self.compress()
+        if direction == 'UP':
+            self.transpose()
+            move_direction(self.board)
+            self.transpose()
+        elif direction == 'DOWN':
+            self.transpose()
+            self.reverse()
+            move_direction(self.board)
+            self.reverse()
+            self.transpose()
+        elif direction == 'LEFT':
+            move_direction(self.board)
+        elif direction == 'RIGHT':
+            self.reverse()
+            move_direction(self.board)
+            self.reverse()
+        else:
+            pass
+
+
+game = Game2048(4)
+
+def switch(a):
+    if(a==2):
+        return 'H'
+    elif(a==4):
+        return 'He'
+    elif(a==8):
+        return 'Li'
+    elif(a==16):
+        return 'Be'
+    elif(a==32):
+        return 'B'
+    elif(a==64):
+        return 'C'
+    elif(a==128):
+        return 'N'
+    elif(a==256):
+        return 'O'
+    elif(a==512):
+        return 'F'
+    elif(a==1024):
+        return 'Ne'
+    elif(a==2048):
+        return 'Na'
+    else:
+        return a
+
+
+def draw_board(game):
+    display.fill(st7789.color565(0, 0, 0))  # Clear the screen
+    for i in range(game.size):
+        for j in range(game.size):
+            value = game.board[i][j]
+            if value != 0:
+                value=switch(value)
+                display.draw_string(i*60+20, j*60+20, str(value), color=st7789.WHITE, bg=st7789.BLACK, size=3, vertical=False, rotate=st7789.ROTATE_0, spacing=1)
+
+
+
+def get_button_action():
+    # Check the status of the buttons
+    if UP.value() == 1:
+        return 'UP'
+    elif DOWN.value() == 1:
+        return 'DOWN'
+    elif LEFT.value() == 1:
+        return 'LEFT'
+    elif RIGHT.value() == 1:
+        return 'RIGHT'
+    else:
+        return None
+
+# 游戏初始化时绘制一次
+draw_board(game)
+
+while True:
+    action = get_button_action()
+    if action is not None:
+        # 记录移动前的状态
+        prev_board = [row.copy() for row in game.board]
+        
+        game.move(action)
+        
+        # 如果游戏状态发生了改变，则重新绘制并添加新的随机方块
+        if game.board != prev_board:
+            if game.check_for_win():
+                print("You win!")
+                break
+            game.add_random_tile()
+            draw_board(game)
+        
+    utime.sleep(0.1)
+
+
+
+
+
+
+
